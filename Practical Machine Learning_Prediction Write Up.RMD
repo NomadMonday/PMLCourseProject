@@ -1,0 +1,88 @@
+---
+title: "Predicting Barbell Lift Classe"
+output: html_document
+---
+
+##Overview
+
+This dataset was taken from the site: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har in which sensors were used to record weight lifting activity as follows:
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Our objective is to use this dataset to predict the Class (spelled "classe" as the variable) based on the sensor output.
+
+##Setup
+
+```{r, warning=FALSE, message=FALSE}
+require(caret)
+require(gbm)
+require(parallel)
+require(doParallel)
+
+#Used for parallel processing of training functions.
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+#Set seed for reproducibility.
+set.seed(3532)
+```
+
+First, let's import our training dataset and take a look at what it contains.
+
+```{r, results='hide'}
+dataorig <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+str(dataorig) #Output hidden to conserve space.
+```
+
+Immediately, we can see some problems with "#DIV/0!" values causing numeric variables to be interpreted as strings (factors). Let's re-read in the data accounting for this.
+
+```{r, results='hide'}
+dataorig <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", na.strings = c("NA", "#DIV/0!"))
+str(dataorig) #Output hidden to conserve space.
+```
+
+Since we know there will now be a lot of NA values, let's first evaluate the columns that contain NA values and the columns that do not contain NA values.
+
+```{r}
+colnames(dataorig[,colSums(is.na(dataorig)) > 0])
+colnames(dataorig[,colSums(is.na(dataorig)) == 0])
+```
+
+The NA columns all contain max, min, amplitude, var, avg, stddev, kurtosis, and skewness values, which aren't really needed as predictors, since this information is contained within the raw measurements. Also, of the remaining columns, we don't really need the X, user_name, timestamp, or window columns as predictor variables. We can then reduce our dataset to the remaining columns.
+
+```{r}
+data <- dataorig[,colSums(is.na(dataorig)) == 0]
+data <- data[,-(1:7)]
+```
+
+Now, we'll divide our training set into a sub-training set and sub-test set in order to validate our results.
+
+```{r}
+inTrain <- createDataPartition(data$classe, p = 0.7, list = FALSE)
+training <- data[inTrain,]
+testing <- data[-inTrain,]
+```
+
+##Modeling
+
+We now attempt a random forest prediction model with cross-validation and see how it performs.
+
+```{r, cache=TRUE}
+fitControl <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
+rfmodel <- train(classe ~ ., data = training, method = "rf", trControl = fitControl)
+rfmodel$finalModel
+```
+
+We can see that the error rate is relatively low, so this looks to be a good model. Let's validate it against our sub-testing set.
+
+```{r}
+rfpredict <- predict(rfmodel, testing)
+confusionMatrix(testing$classe, rfpredict)
+```
+
+Since our confusion matrix confirms our cross-validated training results, showing 99% accuracy, we can feel confident with this model and don't need to explore other modeling methods.
+
+```{r, warning=FALSE, message=FALSE}
+#Parallel processing resource cleanup.
+stopCluster(cluster)
+registerDoSEQ()
+```
